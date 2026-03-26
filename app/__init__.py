@@ -1,9 +1,5 @@
 from flask import Flask
-from flask_sqlalchemy import SQLAlchemy
-from flask_jwt_extended import JWTManager
-
-db = SQLAlchemy()
-jwt = JWTManager()
+from app.extensions import db, jwt  # ← Import from extensions, not local
 
 def create_app():
     app = Flask(__name__)
@@ -21,11 +17,13 @@ def create_app():
     # Register blueprints
     from app.routes import main_bp
     from app.auth import auth_bp
-    from app.startups import startups_bp  # ← Make sure this line exists
+    from app.startups import startups_bp
+    from app.documents.routes import documents_bp  # ← Now this works!
     
     app.register_blueprint(main_bp)
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
-    app.register_blueprint(startups_bp, url_prefix='/api/startups')  # ← Make sure this exists
+    app.register_blueprint(startups_bp, url_prefix='/api/startups')
+    app.register_blueprint(documents_bp, url_prefix='/api/documents')
     
     # Create tables
     with app.app_context():
