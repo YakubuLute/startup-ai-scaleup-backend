@@ -99,7 +99,7 @@ class BusinessDocument(db.Model):
         }
 
 
-# ✅ Valuation class must be at TOP LEVEL (same indentation as User, Startup, BusinessDocument)
+#  Valuation class must be at TOP LEVEL (same indentation as User, Startup, BusinessDocument)
 class Valuation(db.Model):
     __tablename__ = 'valuation'
     
@@ -136,4 +136,42 @@ class Valuation(db.Model):
             'assumptions': self.assumptions,
             'results': self.results,
             'run_at': self.run_at.isoformat() if self.run_at else None
+        }
+    
+class DiagnosticSession(db.Model):
+    __tablename__ = 'diagnostic_session'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    startup_id = db.Column(db.Integer, db.ForeignKey('startup.id'), nullable=False)
+    
+    # Scoring results
+    overall_score = db.Column(db.Integer, nullable=False)  # 0-100
+    stage = db.Column(db.String(20), nullable=False)  # 'Early', 'Growth', 'Maturity'
+    
+    # Sub-scores (stored as JSON for flexibility)
+    sub_scores = db.Column(db.JSON, nullable=False)  # {governance: 70, financial: 45, ...}
+    
+    # Responses (stored as JSON for audit/history)
+    responses = db.Column(db.JSON, nullable=False)  # {question_id: answer, ...}
+    
+    # Recommendations generated
+    recommendations = db.Column(db.JSON, nullable=False)  # List of suggested actions
+    
+    # Metadata
+    run_at = db.Column(db.DateTime, default=db.func.now())
+    version = db.Column(db.Integer, default=1)  # Allow re-runs
+    
+    # Relationships
+    startup = db.relationship('Startup', backref='diagnostics')
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'startup_id': self.startup_id,
+            'overall_score': self.overall_score,
+            'stage': self.stage,
+            'sub_scores': self.sub_scores,
+            'recommendations': self.recommendations,
+            'run_at': self.run_at.isoformat() if self.run_at else None,
+            'version': self.version
         }
