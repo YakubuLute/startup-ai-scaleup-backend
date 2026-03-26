@@ -18,8 +18,10 @@ def create_app():
     from app.routes import main_bp
     from app.auth import auth_bp
     from app.startups import startups_bp
-    from app.documents.routes import documents_bp  # ← Now this works!
-    
+    from app.documents.routes import documents_bp  
+    from app.valuations.routes import valuations_bp
+
+    app.register_blueprint(valuations_bp, url_prefix='/api/valuations')
     app.register_blueprint(main_bp)
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(startups_bp, url_prefix='/api/startups')

@@ -2,6 +2,7 @@ from app.extensions import db
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
 
+
 class User(db.Model, UserMixin):
     __tablename__ = 'user'
     
@@ -65,7 +66,6 @@ class Startup(db.Model):
         }
 
 
-# ✅ BusinessDocument should be at TOP LEVEL (same indentation as User and Startup)
 class BusinessDocument(db.Model):
     __tablename__ = 'business_document'
     
@@ -96,4 +96,44 @@ class BusinessDocument(db.Model):
             'version': self.version,
             'status': self.status,
             'generated_at': self.generated_at.isoformat() if self.generated_at else None
+        }
+
+
+# ✅ Valuation class must be at TOP LEVEL (same indentation as User, Startup, BusinessDocument)
+class Valuation(db.Model):
+    __tablename__ = 'valuation'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    startup_id = db.Column(db.Integer, db.ForeignKey('startup.id'), nullable=False)
+    
+    # Valuation metadata
+    method = db.Column(db.String(20), nullable=False)  # 'DCF', 'Becker', 'Asset'
+    valuation_amount = db.Column(db.Float, nullable=False)
+    currency = db.Column(db.String(3), default='GHS')
+    
+    # Input assumptions (stored as JSON for flexibility)
+    assumptions = db.Column(db.JSON, nullable=False)
+    
+    # Results breakdown (stored as JSON)
+    results = db.Column(db.JSON, nullable=False)
+    
+    # Metadata
+    confidence = db.Column(db.String(20), default='medium')
+    status = db.Column(db.String(20), default='completed')
+    run_at = db.Column(db.DateTime, default=db.func.now())
+    
+    # Relationships
+    startup = db.relationship('Startup', backref='valuations')
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'startup_id': self.startup_id,
+            'method': self.method,
+            'valuation_amount': self.valuation_amount,
+            'currency': self.currency,
+            'confidence': self.confidence,
+            'assumptions': self.assumptions,
+            'results': self.results,
+            'run_at': self.run_at.isoformat() if self.run_at else None
         }
