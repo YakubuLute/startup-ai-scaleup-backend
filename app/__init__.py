@@ -22,15 +22,15 @@ def create_app():
     from app.valuations.routes import valuations_bp
     from app.diagnostics.routes import diagnostics_bp
     from app.verification.routes import verification_bp
+   
 
-    app.register_blueprint(valuations_bp, url_prefix='/api/valuations')
     app.register_blueprint(main_bp)
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(startups_bp, url_prefix='/api/startups')
     app.register_blueprint(documents_bp, url_prefix='/api/documents')
     app.register_blueprint(diagnostics_bp, url_prefix='/api/diagnostics')
     app.register_blueprint(verification_bp, url_prefix='/api/verification')
-    
+    app.register_blueprint(valuations_bp, url_prefix='/api/valuations')
         # Create tables
     with app.app_context():
         db.create_all()

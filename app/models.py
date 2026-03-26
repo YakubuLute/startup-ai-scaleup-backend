@@ -219,3 +219,42 @@ class VerificationCase(db.Model):
             'reviewed_at': self.reviewed_at.isoformat() if self.reviewed_at else None,
             'verified_at': self.verified_at.isoformat() if self.verified_at else None
         }
+    
+class DocumentShare(db.Model):
+    __tablename__ = 'document_share'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    document_id = db.Column(db.Integer, db.ForeignKey('business_document.id'), nullable=False)
+    
+    # Share link metadata
+    share_token = db.Column(db.String(100), unique=True, nullable=False)  # Unique token for URL
+    expires_at = db.Column(db.DateTime, nullable=True)  # Optional expiry
+    is_active = db.Column(db.Boolean, default=True)
+    
+    # Access tracking (FR-14: Audit)
+    access_count = db.Column(db.Integer, default=0)
+    last_accessed_at = db.Column(db.DateTime, nullable=True)
+    
+    # Permissions
+    allow_download = db.Column(db.Boolean, default=False)  # Can viewer download?
+    
+    # Timestamps
+    created_at = db.Column(db.DateTime, default=db.func.now())
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    
+    # Relationships
+    document = db.relationship('BusinessDocument', backref='shares')
+    creator = db.relationship('User', foreign_keys=[created_by_user_id])
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'document_id': self.document_id,
+            'share_token': self.share_token,
+            'expires_at': self.expires_at.isoformat() if self.expires_at else None,
+            'is_active': self.is_active,
+            'access_count': self.access_count,
+            'allow_download': self.allow_download,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'share_url': f'/api/documents/shared/{self.share_token}'  # Relative URL
+        }    
