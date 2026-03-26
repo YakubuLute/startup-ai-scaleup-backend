@@ -175,3 +175,47 @@ class DiagnosticSession(db.Model):
             'run_at': self.run_at.isoformat() if self.run_at else None,
             'version': self.version
         }
+
+class VerificationCase(db.Model):
+    __tablename__ = 'verification_case'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    startup_id = db.Column(db.Integer, db.ForeignKey('startup.id'), nullable=False)
+    
+    # Verification status (FR-41 workflow)
+    status = db.Column(db.String(20), default='pending')  # pending, in_review, verified, rejected
+    verified_at = db.Column(db.DateTime, nullable=True)
+    
+    # Submitted evidence (FR-40: Data Capture)
+    documents_submitted = db.Column(db.JSON, nullable=False)  # [{type, file_url, uploaded_at}, ...]
+    
+    # Review details (FR-41: Audit Trail per Spec 6.4)
+    reviewer_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    review_notes = db.Column(db.Text, nullable=True)
+    rejection_reason = db.Column(db.Text, nullable=True)
+    
+    # Badge metadata (FR-42: Verified Badge)
+    badge_issued = db.Column(db.Boolean, default=False)
+    badge_valid_until = db.Column(db.DateTime, nullable=True)  # Optional expiry
+    
+    # Timestamps
+    submitted_at = db.Column(db.DateTime, default=db.func.now())
+    reviewed_at = db.Column(db.DateTime, nullable=True)
+    
+    # Relationships
+    startup = db.relationship('Startup', backref='verification_cases')
+    reviewer = db.relationship('User', foreign_keys=[reviewer_id])
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'startup_id': self.startup_id,
+            'status': self.status,
+            'documents_submitted': self.documents_submitted,
+            'review_notes': self.review_notes,
+            'rejection_reason': self.rejection_reason,
+            'badge_issued': self.badge_issued,
+            'submitted_at': self.submitted_at.isoformat() if self.submitted_at else None,
+            'reviewed_at': self.reviewed_at.isoformat() if self.reviewed_at else None,
+            'verified_at': self.verified_at.isoformat() if self.verified_at else None
+        }
