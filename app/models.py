@@ -374,3 +374,80 @@ class UsageRecord(db.Model):
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'extra_data': self.extra_data
         }
+    
+ 
+class InvestorProfile(db.Model):
+    __tablename__ = 'investor_profile'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), unique=True, nullable=False)
+    
+    # Investor details
+    firm_name = db.Column(db.String(100), nullable=True)
+    investor_type = db.Column(db.String(50), nullable=True)  # 'Angel', 'VC', 'Corporate', 'Family Office'
+    focus_sectors = db.Column(db.JSON, nullable=True)  # ['Agritech', 'Fintech', ...]
+    focus_stages = db.Column(db.JSON, nullable=True)  # ['Early', 'Growth', 'Maturity']
+    typical_check_size = db.Column(db.String(50), nullable=True)  # '$10K-$50K', '$100K+', etc.
+    
+    # Verification (for investor credibility)
+    is_accredited = db.Column(db.Boolean, default=False)
+    accreditation_docs = db.Column(db.JSON, nullable=True)
+    
+    # Preferences
+    location_preference = db.Column(db.String(100), nullable=True)  # 'Ghana', 'West Africa', 'Global'
+    is_active = db.Column(db.Boolean, default=True)
+    
+    # Metadata
+    created_at = db.Column(db.DateTime, default=db.func.now())
+    updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
+    
+    # Relationships
+    user = db.relationship('User', foreign_keys=[user_id])
+    connection_requests = db.relationship('ConnectionRequest', backref='investor', lazy=True)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'firm_name': self.firm_name,
+            'investor_type': self.investor_type,
+            'focus_sectors': self.focus_sectors,
+            'focus_stages': self.focus_stages,
+            'typical_check_size': self.typical_check_size,
+            'is_accredited': self.is_accredited,
+            'location_preference': self.location_preference
+        }
+
+
+class ConnectionRequest(db.Model):
+    __tablename__ = 'connection_request'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    investor_id = db.Column(db.Integer, db.ForeignKey('investor_profile.id'), nullable=False)
+    startup_id = db.Column(db.Integer, db.ForeignKey('startup.id'), nullable=False)
+    
+    # Request details
+    message = db.Column(db.Text, nullable=True)
+    status = db.Column(db.String(20), default='pending')  # pending, accepted, rejected, withdrawn
+    
+    # Contact info shared (after acceptance)
+    contact_info_shared = db.Column(db.JSON, nullable=True)  # What info was shared
+    
+    # Timestamps
+    created_at = db.Column(db.DateTime, default=db.func.now())
+    responded_at = db.Column(db.DateTime, nullable=True)
+    
+    # Relationships
+    startup = db.relationship('Startup', backref='connection_requests')
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'investor_id': self.investor_id,
+            'investor_firm': self.investor.firm_name if self.investor else None,
+            'startup_id': self.startup_id,
+            'startup_name': self.startup.name if self.startup else None,
+            'message': self.message,
+            'status': self.status,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'responded_at': self.responded_at.isoformat() if self.responded_at else None
+        }    
