@@ -6,7 +6,7 @@
 import io
 import secrets
 from datetime import datetime, timedelta
-
+from app.notifications.services import notify_document_ready
 from flask import Blueprint, request, jsonify, send_file
 from flask_jwt_extended import jwt_required, get_jwt_identity
 
@@ -37,11 +37,16 @@ def list_templates():
     }), 200
 
 
-# ✅ CORRECT - Only ONE function:
+
 @documents_bp.route('/generate', methods=['POST'])
 @jwt_required()
 def generate_document_endpoint():
     """
+    notify_document_ready(
+    document_title=new_doc.title,
+    user_id=current_user_id,
+    doc_id=new_doc.id
+    )
     FR-11 + FR-12: Generate a new document from template + inputs.
     Includes FR-62 usage limit enforcement for billing.
     """

@@ -451,3 +451,110 @@ class ConnectionRequest(db.Model):
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'responded_at': self.responded_at.isoformat() if self.responded_at else None
         }    
+    
+class Notification(db.Model):
+    __tablename__ = 'notification'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    
+    # Notification content
+    title = db.Column(db.String(200), nullable=False)
+    message = db.Column(db.Text, nullable=False)
+    notification_type = db.Column(db.String(50), nullable=False)  # 'connection', 'verification', 'document', 'billing', 'system'
+    
+    # Status
+    is_read = db.Column(db.Boolean, default=False)
+    is_archived = db.Column(db.Boolean, default=False)
+    
+    # Related entity (optional - for deep linking)
+    related_type = db.Column(db.String(50), nullable=True)  # 'startup', 'document', 'valuation', etc.
+    related_id = db.Column(db.Integer, nullable=True)  # ID of related entity
+    
+    # Delivery channels
+    sent_email = db.Column(db.Boolean, default=False)
+    sent_sms = db.Column(db.Boolean, default=False)
+    
+    # Timestamps
+    created_at = db.Column(db.DateTime, default=db.func.now())
+    read_at = db.Column(db.DateTime, nullable=True)
+    
+    # Relationships
+    user = db.relationship('User', backref='notifications')
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'title': self.title,
+            'message': self.message,
+            'type': self.notification_type,
+            'is_read': self.is_read,
+            'is_archived': self.is_archived,
+            'related_type': self.related_type,
+            'related_id': self.related_id,
+            'sent_email': self.sent_email,
+            'sent_sms': self.sent_sms,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'read_at': self.read_at.isoformat() if self.read_at else None
+        }
+
+
+class NotificationPreference(db.Model):
+    __tablename__ = 'notification_preference'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), unique=True, nullable=False)
+    
+    # Email preferences
+    email_enabled = db.Column(db.Boolean, default=True)
+    email_connection_requests = db.Column(db.Boolean, default=True)
+    email_verification_updates = db.Column(db.Boolean, default=True)
+    email_billing_alerts = db.Column(db.Boolean, default=True)
+    email_document_ready = db.Column(db.Boolean, default=True)
+    
+    # SMS preferences
+    sms_enabled = db.Column(db.Boolean, default=False)
+    sms_connection_requests = db.Column(db.Boolean, default=False)
+    sms_verification_updates = db.Column(db.Boolean, default=False)
+    sms_billing_alerts = db.Column(db.Boolean, default=True)
+    
+    # In-app preferences
+    in_app_enabled = db.Column(db.Boolean, default=True)
+    
+    # Contact info for notifications
+    email_address = db.Column(db.String(120), nullable=True)
+    phone_number = db.Column(db.String(20), nullable=True)
+    
+    # Metadata
+    created_at = db.Column(db.DateTime, default=db.func.now())
+    updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
+    
+    # Relationships
+    user = db.relationship('User', backref='notification_preferences')
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'email': {
+                'enabled': self.email_enabled,
+                'connection_requests': self.email_connection_requests,
+                'verification_updates': self.email_verification_updates,
+                'billing_alerts': self.email_billing_alerts,
+                'document_ready': self.email_document_ready
+            },
+            'sms': {
+                'enabled': self.sms_enabled,
+                'connection_requests': self.sms_connection_requests,
+                'verification_updates': self.sms_verification_updates,
+                'billing_alerts': self.sms_billing_alerts
+            },
+            'in_app': {
+                'enabled': self.in_app_enabled
+            },
+            'contact': {
+                'email_address': self.email_address,
+                'phone_number': self.phone_number
+            }
+        }    

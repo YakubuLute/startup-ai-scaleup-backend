@@ -1,6 +1,14 @@
+"""
+Verification Routes (FR-40 to FR-42)
+- Submit verification documents
+- Review and approve/reject
+- Verification status and badge
+"""
+
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.extensions import db
+from app.notifications.services import notify_verification_approved, notify_verification_rejected
 from app.models import VerificationCase, Startup, User
 from app.verification.services import (
     create_verification_case,
@@ -9,6 +17,10 @@ from app.verification.services import (
 )
 
 verification_bp = Blueprint('verification', __name__)
+
+# ============================================================================
+# STARTUP ENDPOINTS (Auth Required - Startup Founder)
+# ============================================================================
 
 @verification_bp.route('/submit', methods=['POST'])
 @jwt_required()
@@ -64,6 +76,7 @@ def submit_verification():
         "recommendations": result['recommendations']
     }), 201
 
+
 @verification_bp.route('/status', methods=['GET'])
 @jwt_required()
 def get_verification_status():
@@ -100,6 +113,7 @@ def get_verification_status():
         "case_id": case.id
     }), 200
 
+
 @verification_bp.route('/<int:case_id>', methods=['GET'])
 @jwt_required()
 def get_verification_case(case_id):
@@ -112,6 +126,7 @@ def get_verification_case(case_id):
         return jsonify({"msg": "Access denied"}), 403
     
     return jsonify({"case": case.to_dict()}), 200
+
 
 # ============================================================================
 # PROGRAM MANAGER / ADMIN ENDPOINTS (FR-41: Verification Workflows)
@@ -144,12 +159,13 @@ def get_verification_queue():
                 "startup_name": c.startup.name,
                 "status": c.status,
                 "submitted_at": c.submitted_at.isoformat() if c.submitted_at else None,
-                "completeness_score": len(c.documents_submitted) * 10  # Simple score
+                "completeness_score": len(c.documents_submitted) * 10
             }
             for c in cases
         ],
         "count": len(cases)
     }), 200
+
 
 @verification_bp.route('/admin/<int:case_id>/review', methods=['POST'])
 @jwt_required()
@@ -157,6 +173,7 @@ def review_verification(case_id):
     """
     FR-41: Program Manager reviews and makes decision on verification case.
     Audit trail stored per Spec 6.4 Security.
+    Includes FR-80: Notification triggers for approval/rejection.
     """
     current_user_id = int(get_jwt_identity())
     current_user = User.query.get(current_user_id)
@@ -193,6 +210,25 @@ def review_verification(case_id):
     
     db.session.commit()
     
+    # ========================================================================
+    # FR-80: Send notification to startup owner
+    # ========================================================================
+    startup_owner_id = case.startup.owner_user_id
+    
+    if data['decision'] == 'verified':
+        notify_verification_approved(
+            startup_name=case.startup.name,
+            user_id=startup_owner_id,
+            case_id=case.id
+        )
+    else:
+        notify_verification_rejected(
+            startup_name=case.startup.name,
+            user_id=startup_owner_id,
+            case_id=case.id,
+            reason=data.get('rejection_reason', 'Please review requirements')
+        )
+    
     return jsonify({
         "msg": f"Verification {data['decision']} successfully",
         "case_id": case.id,
@@ -200,6 +236,7 @@ def review_verification(case_id):
         "badge_issued": case.badge_issued,
         "reviewer": current_user.name
     }), 200
+
 
 @verification_bp.route('/admin/stats', methods=['GET'])
 @jwt_required()

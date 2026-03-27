@@ -1,5 +1,9 @@
 """
 Investor Portal Routes (FR-70 to FR-72)
+- Startup discovery & search (FR-70)
+- Startup profile view (FR-71)
+- Connection requests (FR-72)
+- Notifications integration (FR-80)
 """
 
 from flask import Blueprint, request, jsonify
@@ -13,8 +17,13 @@ from app.investors.services import (
     respond_to_connection_request,
     get_investor_profile
 )
+from app.notifications.services import (
+    notify_connection_request,
+    notify_connection_accepted
+)
 
 investors_bp = Blueprint('investors', __name__)
+
 # ============================================================================
 # PUBLIC ENDPOINTS (No Auth Required)
 # ============================================================================
@@ -49,7 +58,7 @@ def discover_startups():
                 'sector': s.sector,
                 'country': s.country,
                 'stage': s.stage,
-                'is_verified': s.is_verified  # Simplified - in production, check VerificationCase
+                'is_verified': s.is_verified
             }
             for s in startups
         ],
@@ -60,6 +69,7 @@ def discover_startups():
             "has_more": offset + limit < total
         }
     }), 200
+
 
 # ============================================================================
 # INVESTOR ENDPOINTS (Auth Required - Investor Role)
@@ -75,6 +85,7 @@ def get_my_investor_profile():
     return jsonify({
         "profile": profile.to_dict()
     }), 200
+
 
 @investors_bp.route('/profile', methods=['PUT'])
 @jwt_required()
@@ -106,6 +117,7 @@ def update_investor_profile():
         "profile": profile.to_dict()
     }), 200
 
+
 @investors_bp.route('/startups/<int:startup_id>', methods=['GET'])
 @jwt_required()
 def view_startup_profile(startup_id):
@@ -128,11 +140,13 @@ def view_startup_profile(startup_id):
         "startup": startup_data
     }), 200
 
+
 @investors_bp.route('/startups/<int:startup_id>/connect', methods=['POST'])
 @jwt_required()
 def send_connection_request(startup_id):
     """
     FR-72: Investor sends connection request to startup.
+    FR-80: Triggers notification to startup owner.
     """
     current_user_id = int(get_jwt_identity())
     data = request.get_json()
@@ -150,11 +164,24 @@ def send_connection_request(startup_id):
     if not result['success']:
         return jsonify({"msg": result['error']}), 400
     
+    # ========================================================================
+    # FR-80: Send notification to startup owner
+    # ========================================================================
+    startup = Startup.query.get(startup_id)
+    if startup:
+        notify_connection_request(
+            investor_name=investor_profile.firm_name or "An investor",
+            startup_name=startup.name,
+            startup_owner_id=startup.owner_user_id,
+            request_id=result['request_id']
+        )
+    
     return jsonify({
         "msg": result['message'],
         "request_id": result['request_id'],
         "status": result['status']
     }), 201
+
 
 @investors_bp.route('/connections', methods=['GET'])
 @jwt_required()
@@ -172,6 +199,7 @@ def get_my_connections():
         "connections": [r.to_dict() for r in requests],
         "count": len(requests)
     }), 200
+
 
 # ============================================================================
 # STARTUP OWNER ENDPOINTS (Auth Required - Startup Founder)
@@ -197,11 +225,13 @@ def get_connection_requests():
         "count": len(requests)
     }), 200
 
+
 @investors_bp.route('/requests/<int:request_id>/respond', methods=['POST'])
 @jwt_required()
 def respond_to_request(request_id):
     """
     FR-72: Startup owner accepts or rejects connection request.
+    FR-80: Triggers notification to investor when accepted.
     """
     current_user_id = int(get_jwt_identity())
     data = request.get_json()
@@ -217,6 +247,19 @@ def respond_to_request(request_id):
     
     if not result['success']:
         return jsonify({"msg": result['error']}), 400
+    
+    # ========================================================================
+    # FR-80: Send notification to investor if accepted
+    # ========================================================================
+    if data['decision'] == 'accepted':
+        request = ConnectionRequest.query.get(request_id)
+        if request:
+            notify_connection_accepted(
+                startup_name=request.startup.name,
+                investor_name=request.investor.firm_name or "An investor",
+                investor_user_id=request.investor.user_id,
+                request_id=request_id
+            )
     
     return jsonify({
         "msg": result['message'],
