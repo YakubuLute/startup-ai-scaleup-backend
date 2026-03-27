@@ -257,4 +257,120 @@ class DocumentShare(db.Model):
             'allow_download': self.allow_download,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'share_url': f'/api/documents/shared/{self.share_token}'  # Relative URL
-        }    
+ 
+        }   
+
+
+
+class SubscriptionPlan(db.Model):
+    __tablename__ = 'subscription_plan'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(50), unique=True, nullable=False)  # 'Free', 'Starter', 'Growth', 'Enterprise'
+    description = db.Column(db.Text, nullable=True)
+    
+    # Pricing
+    price = db.Column(db.Float, nullable=True)  # Null for free tier
+    currency = db.Column(db.String(3), default='GHS')
+    billing_cycle = db.Column(db.String(20), default='monthly')  # monthly, yearly
+    
+    # Usage limits (FR-60: Plan Configuration)
+    max_documents_per_month = db.Column(db.Integer, default=1)
+    max_valuations_per_month = db.Column(db.Integer, default=0)
+    max_diagnostics_per_month = db.Column(db.Integer, default=1)
+    max_team_members = db.Column(db.Integer, default=1)
+    max_storage_mb = db.Column(db.Integer, default=100)
+    
+    # Features
+    features = db.Column(db.JSON, nullable=False)  # List of feature flags
+    is_active = db.Column(db.Boolean, default=True)
+    
+    # Metadata
+    created_at = db.Column(db.DateTime, default=db.func.now())
+    updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self.name,
+            'description': self.description,
+            'price': self.price,
+            'currency': self.currency,
+            'billing_cycle': self.billing_cycle,
+            'limits': {
+                'documents_per_month': self.max_documents_per_month,
+                'valuations_per_month': self.max_valuations_per_month,
+                'diagnostics_per_month': self.max_diagnostics_per_month,
+                'team_members': self.max_team_members,
+                'storage_mb': self.max_storage_mb
+            },
+            'features': self.features,
+            'is_active': self.is_active
+        }
+
+
+class Subscription(db.Model):
+    __tablename__ = 'subscription'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    startup_id = db.Column(db.Integer, db.ForeignKey('startup.id'), nullable=False, unique=True)
+    plan_id = db.Column(db.Integer, db.ForeignKey('subscription_plan.id'), nullable=False)
+    
+    # Status
+    status = db.Column(db.String(20), default='active')  # active, cancelled, expired, past_due
+    current_period_start = db.Column(db.DateTime, nullable=False)
+    current_period_end = db.Column(db.DateTime, nullable=False)
+    
+    # Payment info (stored securely - in production, use Stripe/Paystack tokens)
+    payment_provider = db.Column(db.String(50), nullable=True)  # 'stripe', 'paystack', 'manual'
+    provider_subscription_id = db.Column(db.String(100), nullable=True)  # External ID
+    
+    # Metadata
+    cancelled_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=db.func.now())
+    updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
+    
+    # Relationships
+    startup = db.relationship('Startup', backref='subscription')
+    plan = db.relationship('SubscriptionPlan')
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'startup_id': self.startup_id,
+            'plan': self.plan.to_dict() if self.plan else None,
+            'status': self.status,
+            'current_period_start': self.current_period_start.isoformat() if self.current_period_start else None,
+            'current_period_end': self.current_period_end.isoformat() if self.current_period_end else None,
+            'payment_provider': self.payment_provider
+        }
+
+
+class UsageRecord(db.Model):
+    __tablename__ = 'usage_record'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    startup_id = db.Column(db.Integer, db.ForeignKey('startup.id'), nullable=False)
+    
+    # Usage type (FR-62: Track specific actions)
+    resource_type = db.Column(db.String(50), nullable=False)  # 'document', 'valuation', 'diagnostic', 'team_member'
+    resource_id = db.Column(db.Integer, nullable=True)  # ID of the specific resource created
+    
+    # Timestamp for billing cycle calculation
+    created_at = db.Column(db.DateTime, default=db.func.now())
+    
+    # Metadata
+    extra_data = db.Column(db.JSON, nullable=True)
+    
+    # Relationships
+    startup = db.relationship('Startup', backref='usage_records')
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'startup_id': self.startup_id,
+            'resource_type': self.resource_type,
+            'resource_id': self.resource_id,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'extra_data': self.extra_data
+        }

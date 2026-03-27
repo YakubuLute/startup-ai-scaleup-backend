@@ -1,17 +1,34 @@
+
+
+# ============================================================================
+# IMPORTS (All at top - no circular imports)
+# ============================================================================
+import io
+import secrets
+from datetime import datetime, timedelta
+
 from flask import Blueprint, request, jsonify, send_file
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from app.extensions import db
-from app.models import BusinessDocument, Startup, DocumentShare
-from app.documents.services import generate_document
-from app.documents.export import generate_pdf_from_markdown, generate_docx_from_markdown  
 
+from app.extensions import db
+from app.models import BusinessDocument, Startup, DocumentShare, Subscription, SubscriptionPlan
+from app.documents.services import generate_document, TEMPLATES
+from app.documents.export import generate_pdf_from_markdown, generate_docx_from_markdown
+from app.billing.services import check_usage_limit, record_usage
+
+# ============================================================================
+# BLUEPRINT DEFINITION
+# ============================================================================
 documents_bp = Blueprint('documents', __name__)
+
+# ============================================================================
+# CORE DOCUMENT ENDPOINTS (FR-10 to FR-13)
+# ============================================================================
 
 @documents_bp.route('/templates', methods=['GET'])
 @jwt_required()
 def list_templates():
     """FR-10: List available document templates"""
-    from app.documents.services import TEMPLATES
     return jsonify({
         "templates": [
             {"type": key, "name": key.replace('_', ' ').title()}
@@ -19,10 +36,15 @@ def list_templates():
         ]
     }), 200
 
+
+# ✅ CORRECT - Only ONE function:
 @documents_bp.route('/generate', methods=['POST'])
 @jwt_required()
 def generate_document_endpoint():
-    """FR-11 + FR-12: Generate a new document from template + inputs"""
+    """
+    FR-11 + FR-12: Generate a new document from template + inputs.
+    Includes FR-62 usage limit enforcement for billing.
+    """
     current_user_id = int(get_jwt_identity())
     data = request.get_json()
     
@@ -37,13 +59,79 @@ def generate_document_endpoint():
     if not startup or startup.owner_user_id != current_user_id:
         return jsonify({"msg": "Access denied"}), 403
     
+    # FR-62: Check usage limit before allowing document generation
+    subscription = Subscription.query.filter_by(
+        startup_id=data['startup_id'], 
+        status='active'
+    ).first()
+    plan = subscription.plan if subscription else SubscriptionPlan.query.filter_by(name='Free').first()
+    
+    is_allowed, message, current, limit = check_usage_limit(
+        data['startup_id'], 
+        'document', 
+        plan
+    )
+    if not is_allowed:
+        return jsonify({"msg": f"Plan limit exceeded: {message}"}), 402
+    
+    # Generate document content
     try:
+        inputs_with_title = data['inputs'].copy()
+        inputs_with_title['title'] = data['title']
+        content = generate_document(data['doc_type'], inputs_with_title)
+        
+        new_doc = BusinessDocument(
+            startup_id=data['startup_id'],
+            title=data['title'],
+            doc_type=data['doc_type'],
+            content=content,
+            version=1,
+            status='draft'
+        )
+        db.session.add(new_doc)
+        db.session.commit()
+        
+        # FR-62: Record usage after successful generation
+        record_usage(data['startup_id'], 'document', new_doc.id)
+        
+        return jsonify({
+            "msg": "Document generated successfully",
+            "document": new_doc.to_dict()
+        }), 201
+        
+    except ValueError as e:
+        return jsonify({"msg": str(e)}), 400
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"msg": "Failed to generate document", "error": str(e)}), 500
+    # ========================================================================
+    # FR-62: Check usage limit before allowing document generation
+    # ========================================================================
+    subscription = Subscription.query.filter_by(
+        startup_id=data['startup_id'], 
+        status='active'
+    ).first()
+    plan = subscription.plan if subscription else SubscriptionPlan.query.filter_by(name='Free').first()
+    
+    is_allowed, message, current, limit = check_usage_limit(
+        data['startup_id'], 
+        'document', 
+        plan
+    )
+    if not is_allowed:
+        return jsonify({"msg": f"Plan limit exceeded: {message}"}), 402  # 402 = Payment Required
+    
+    # ========================================================================
+    # Generate document content
+    # ========================================================================
+    try:
+        # Merge title into inputs for template substitution
         inputs_with_title = data['inputs'].copy()
         inputs_with_title['title'] = data['title']
         
         # Generate content using template engine (placeholder for AI)
         content = generate_document(data['doc_type'], inputs_with_title)
-            
+        
         # Save to database
         new_doc = BusinessDocument(
             startup_id=data['startup_id'],
@@ -56,6 +144,11 @@ def generate_document_endpoint():
         db.session.add(new_doc)
         db.session.commit()
         
+        # ====================================================================
+        # FR-62: Record usage after successful generation
+        # ====================================================================
+        record_usage(data['startup_id'], 'document', new_doc.id)
+        
         return jsonify({
             "msg": "Document generated successfully",
             "document": new_doc.to_dict()
@@ -66,6 +159,7 @@ def generate_document_endpoint():
     except Exception as e:
         db.session.rollback()
         return jsonify({"msg": "Failed to generate document", "error": str(e)}), 500
+
 
 @documents_bp.route('', methods=['GET'])
 @jwt_required()
@@ -78,12 +172,15 @@ def list_documents():
     startup_ids = [s.id for s in startups]
     
     # Get documents for those startups
-    docs = BusinessDocument.query.filter(BusinessDocument.startup_id.in_(startup_ids)).all()
+    docs = BusinessDocument.query.filter(
+        BusinessDocument.startup_id.in_(startup_ids)
+    ).all()
     
     return jsonify({
         "documents": [d.to_dict() for d in docs],
         "count": len(docs)
     }), 200
+
 
 @documents_bp.route('/<int:doc_id>', methods=['GET'])
 @jwt_required()
@@ -99,13 +196,9 @@ def get_document(doc_id):
     return jsonify({"document": doc.to_dict()}), 200
 
 
-
-import os
-import io
-import secrets
-from datetime import datetime, timedelta
-from flask import send_file, jsonify, request, url_for
-from app.models import DocumentShare
+# ============================================================================
+# FR-14: EXPORT & SHARING ENDPOINTS
+# ============================================================================
 
 @documents_bp.route('/<int:doc_id>/export', methods=['POST'])
 @jwt_required()
@@ -127,7 +220,7 @@ def export_document(doc_id):
         return jsonify({"msg": "Access denied"}), 403
     
     try:
-        # ✅ EXPORT LOGIC MUST BE INSIDE THIS FUNCTION:
+        # Generate file based on format
         if export_format == 'pdf':
             # Use reportlab-based PDF generator (Windows-compatible)
             file_bytes = generate_pdf_from_markdown(doc.content, title=doc.title)
@@ -152,6 +245,7 @@ def export_document(doc_id):
         return jsonify({"msg": f"Export library not installed: {str(e)}"}), 500
     except Exception as e:
         return jsonify({"msg": "Failed to export document", "error": str(e)}), 500
+
 
 @documents_bp.route('/<int:doc_id>/share', methods=['POST'])
 @jwt_required()
@@ -197,6 +291,7 @@ def create_share_link(doc_id):
         "allow_download": share.allow_download
     }), 201
 
+
 @documents_bp.route('/shared/<share_token>', methods=['GET'])
 def access_shared_document(share_token):
     """
@@ -238,6 +333,7 @@ def access_shared_document(share_token):
         }
     }), 200
 
+
 @documents_bp.route('/<int:doc_id>/shares', methods=['GET'])
 @jwt_required()
 def list_document_shares(doc_id):
@@ -252,12 +348,15 @@ def list_document_shares(doc_id):
         return jsonify({"msg": "Access denied"}), 403
     
     # Get all shares for this document
-    shares = DocumentShare.query.filter_by(document_id=doc_id).order_by(DocumentShare.created_at.desc()).all()
+    shares = DocumentShare.query.filter_by(
+        document_id=doc_id
+    ).order_by(DocumentShare.created_at.desc()).all()
     
     return jsonify({
         "shares": [s.to_dict() for s in shares],
         "count": len(shares)
     }), 200
+
 
 @documents_bp.route('/shares/<int:share_id>/revoke', methods=['POST'])
 @jwt_required()
