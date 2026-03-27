@@ -25,6 +25,9 @@ def create_app():
     from app.billing.routes import billing_bp
     from app.investors.routes import investors_bp
     from app.notifications.routes import notifications_bp
+    from app.programs.routes import programs_bp
+    from app.analytics.routes import analytics_bp
+
 
 
     app.register_blueprint(main_bp)
@@ -37,6 +40,8 @@ def create_app():
     app.register_blueprint(billing_bp, url_prefix='/api/billing')
     app.register_blueprint(investors_bp, url_prefix='/api/investors')
     app.register_blueprint(notifications_bp, url_prefix='/api/notifications')
+    app.register_blueprint(programs_bp, url_prefix='/api/programs')
+    app.register_blueprint(analytics_bp, url_prefix='/api/analytics')
         # Create tables
     with app.app_context():
         db.create_all()

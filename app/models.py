@@ -558,3 +558,151 @@ class NotificationPreference(db.Model):
                 'phone_number': self.phone_number
             }
         }    
+    
+
+class Program(db.Model):
+    __tablename__ = 'program'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)  # e.g., "Agrico Hub Scaleup Program 2026"
+    description = db.Column(db.Text, nullable=True)
+    
+    # Program details
+    start_date = db.Column(db.DateTime, nullable=False)
+    end_date = db.Column(db.DateTime, nullable=False)
+    status = db.Column(db.String(20), default='active')  # draft, active, completed, archived
+    
+    # Capacity
+    max_cohorts = db.Column(db.Integer, default=1)
+    max_startups_per_cohort = db.Column(db.Integer, default=20)
+    
+    # Metadata
+    created_at = db.Column(db.DateTime, default=db.func.now())
+    updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
+    
+    # Relationships
+    cohorts = db.relationship('Cohort', backref='program', lazy=True)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self.name,
+            'description': self.description,
+            'start_date': self.start_date.isoformat() if self.start_date else None,
+            'end_date': self.end_date.isoformat() if self.end_date else None,
+            'status': self.status,
+            'max_cohorts': self.max_cohorts,
+            'max_startups_per_cohort': self.max_startups_per_cohort
+        }
+
+
+class Cohort(db.Model):
+    __tablename__ = 'cohort'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    program_id = db.Column(db.Integer, db.ForeignKey('program.id'), nullable=False)
+    name = db.Column(db.String(100), nullable=False)  # e.g., "Cohort A - 2026 Q1"
+    description = db.Column(db.Text, nullable=True)
+    
+    # Cohort details
+    start_date = db.Column(db.DateTime, nullable=False)
+    end_date = db.Column(db.DateTime, nullable=False)
+    status = db.Column(db.String(20), default='active')  # draft, active, completed, archived
+    
+    # Capacity
+    max_startups = db.Column(db.Integer, default=20)
+    
+    # Metadata
+    created_at = db.Column(db.DateTime, default=db.func.now())
+    updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
+    
+    # Relationships
+    enrollments = db.relationship('CohortEnrollment', backref='cohort', lazy=True)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'program_id': self.program_id,
+            'name': self.name,
+            'description': self.description,
+            'start_date': self.start_date.isoformat() if self.start_date else None,
+            'end_date': self.end_date.isoformat() if self.end_date else None,
+            'status': self.status,
+            'max_startups': self.max_startups,
+            'enrolled_count': len(self.enrollments)
+        }
+
+
+class CohortEnrollment(db.Model):
+    __tablename__ = 'cohort_enrollment'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    cohort_id = db.Column(db.Integer, db.ForeignKey('cohort.id'), nullable=False)
+    startup_id = db.Column(db.Integer, db.ForeignKey('startup.id'), nullable=False)
+    
+    # Enrollment details
+    status = db.Column(db.String(20), default='pending')  # pending, accepted, rejected, withdrawn, graduated
+    enrolled_at = db.Column(db.DateTime, default=db.func.now())
+    
+    # Progress tracking (FR-52)
+    overall_progress = db.Column(db.Integer, default=0)  # 0-100%
+    milestones_completed = db.Column(db.JSON, nullable=True)  # List of completed milestone IDs
+    
+    # Notes
+    admin_notes = db.Column(db.Text, nullable=True)
+    
+    # Metadata
+    created_at = db.Column(db.DateTime, default=db.func.now())
+    updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
+    
+    # Relationships
+    startup = db.relationship('Startup', backref='cohort_enrollments')
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'cohort_id': self.cohort_id,
+            'cohort_name': self.cohort.name if self.cohort else None,
+            'startup_id': self.startup_id,
+            'startup_name': self.startup.name if self.startup else None,
+            'status': self.status,
+            'overall_progress': self.overall_progress,
+            'milestones_completed': self.milestones_completed or [],
+            'admin_notes': self.admin_notes,
+            'enrolled_at': self.enrolled_at.isoformat() if self.enrolled_at else None
+        }
+
+
+class ProgramMilestone(db.Model):
+    __tablename__ = 'program_milestone'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    program_id = db.Column(db.Integer, db.ForeignKey('program.id'), nullable=False)
+    name = db.Column(db.String(100), nullable=False)  # e.g., "Complete Business Plan"
+    description = db.Column(db.Text, nullable=True)
+    
+    # Milestone details
+    order = db.Column(db.Integer, nullable=False)  # Sequence in program
+    is_required = db.Column(db.Boolean, default=True)
+    
+    # Link to platform features (auto-verify completion)
+    linked_feature = db.Column(db.String(50), nullable=True)  # 'document', 'valuation', 'diagnostic', 'verification'
+    linked_feature_id = db.Column(db.Integer, nullable=True)  # Optional: specific resource ID
+    
+    # Metadata
+    created_at = db.Column(db.DateTime, default=db.func.now())
+    
+    # Relationships
+    program = db.relationship('Program', backref='milestones')
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'program_id': self.program_id,
+            'name': self.name,
+            'description': self.description,
+            'order': self.order,
+            'is_required': self.is_required,
+            'linked_feature': self.linked_feature,
+            'linked_feature_id': self.linked_feature_id
+        }
