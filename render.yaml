@@ -7,7 +7,7 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn run:app --bind 0.0.0.0:$PORT --log-file -
     envVars:
-      - key: FLASK_APP
+      - key: FLASK_APP        
         value: run.py
       - key: FLASK_ENV
         value: production
