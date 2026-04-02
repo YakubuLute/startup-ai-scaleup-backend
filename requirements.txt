@@ -7,16 +7,20 @@ Flask-CORS==4.0.0
 # Database
 SQLAlchemy==2.0.23
 
-# Production server (REQUIRED for Render)
+# PDF Generation
+reportlab==4.0.8
+
+# Word Document Generation
+python-docx==1.1.0
+
+# Production server
 gunicorn==21.2.0
 
-# PostgreSQL adapter (Render uses Postgres)
+# PostgreSQL adapter
 psycopg2-binary==2.9.9
 
-# Utilities
+# Environment variables
 python-dotenv==1.0.0
+
+# Utilities
 requests==2.31.0
-reportlab==4.0.8
-python-docx==1.1.0gunicorn==21.2.0 
-psycopg2-binary==2.9.9 
-python-dotenv==1.0.0 
