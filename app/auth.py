@@ -1,40 +1,32 @@
-# app/__init__.py
-import os  # ← Required for getenv
-from flask import Flask
-from flask_cors import CORS  # ← Import at TOP of file
-from app.extensions import db, jwt
+# app/auth.py ✅ CORRECT STRUCTURE
+from flask import Blueprint, request, jsonify
+from app.extensions import db
+from app.models import User
+from flask_jwt_extended import create_access_token
 
-def create_app():
-    app = Flask(__name__)
+# ✅ MUST be at TOP LEVEL (not inside any function/class)
+auth_bp = Blueprint('auth', __name__)
 
-    # 🔐 Config
-    app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-key')
-    app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///db.sqlite3')
-    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-    app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'dev-jwt-key')
-
-    # 🌐 CORS - MUST be after app = Flask(__name__) and before blueprints
-    CORS(app, resources={
-        r"/api/*": {
-            "origins": ["http://localhost:3000", "http://127.0.0.1:3000"],
-            "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-            "allow_headers": ["Content-Type", "Authorization"],
-            "supports_credentials": True
-        }
-    })
-
-    # 🔌 Init extensions
-    db.init_app(app)
-    jwt.init_app(app)
-
-    # 🗂 Register blueprints (your existing code)
-    from app.auth import auth_bp
-    # ... other imports ...
+@auth_bp.route('/register', methods=['POST'])
+def register():
+    data = request.get_json()
+    if User.query.filter_by(email=data['email']).first():
+        return jsonify({"msg": "Email already exists"}), 400
     
-    app.register_blueprint(auth_bp, url_prefix='/api/auth')
-    # ... other registrations ...
-
-    with app.app_context():
-        db.create_all()
+    new_user = User(name=data['name'], email=data['email'], role=data.get('role', 'Founder'))
+    new_user.set_password(data['password'])
     
-    return app
+    db.session.add(new_user)
+    db.session.commit()
+    return jsonify({"msg": "User created successfully"}), 201
+
+@auth_bp.route('/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    user = User.query.filter_by(email=data['email']).first()
+    
+    if user and user.check_password(data['password']):
+        access_token = create_access_token(identity=str(user.id))
+        return jsonify({"access_token": access_token, "role": user.role}), 200
+    
+    return jsonify({"msg": "Invalid credentials"}), 401
