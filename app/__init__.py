@@ -1,24 +1,42 @@
+# app/__init__.py
+import os  # ← Add this import at the top
 from flask import Flask
-from app.extensions import db, jwt  
+from flask_cors import CORS  # ← Move import to top
+from app.extensions import db, jwt
 
 def create_app():
     app = Flask(__name__)
-    
-    # Configuration
-    app.config['SECRET_KEY'] = 'your-secret-key-change-in-production'
-    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///db.sqlite3'
-    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-    app.config['JWT_SECRET_KEY'] = 'your-jwt-secret-key'
 
-    # Initialize extensions
+    # 🔐 Configuration (use env vars in production)
+    app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-key-change-in-production')
+    app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///db.sqlite3')
+    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+    app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'dev-jwt-key-change-in-production')
+
+    # 🌐 Configure CORS
+    CORS(app, resources={
+        r"/api/*": {
+            "origins": [
+                "http://localhost:3000",
+                "http://127.0.0.1:3000",
+                # Add production frontend when deployed:
+                # "https://your-production-frontend.com"
+            ],
+            "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+            "allow_headers": ["Content-Type", "Authorization"],
+            "supports_credentials": True
+        }
+    })
+
+    # 🔌 Initialize extensions
     db.init_app(app)
     jwt.init_app(app)
-    
-    # Register blueprints
+
+    # 🗂 Register blueprints
     from app.routes import main_bp
     from app.auth import auth_bp
     from app.startups import startups_bp
-    from app.documents.routes import documents_bp  
+    from app.documents.routes import documents_bp
     from app.valuations.routes import valuations_bp
     from app.diagnostics.routes import diagnostics_bp
     from app.verification.routes import verification_bp
@@ -27,8 +45,6 @@ def create_app():
     from app.notifications.routes import notifications_bp
     from app.programs.routes import programs_bp
     from app.analytics.routes import analytics_bp
-
-
 
     app.register_blueprint(main_bp)
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
@@ -42,8 +58,9 @@ def create_app():
     app.register_blueprint(notifications_bp, url_prefix='/api/notifications')
     app.register_blueprint(programs_bp, url_prefix='/api/programs')
     app.register_blueprint(analytics_bp, url_prefix='/api/analytics')
-        # Create tables
+
+    # 🗄 Create DB tables
     with app.app_context():
         db.create_all()
-    
+
     return app
