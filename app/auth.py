@@ -1,8 +1,8 @@
 # app/auth.py
 from flask import Blueprint, request, jsonify
+from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
 from app.extensions import db
 from app.models import User
-from flask_jwt_extended import create_access_token
 
 auth_bp = Blueprint('auth', __name__)
 
@@ -60,3 +60,21 @@ def login():
         }), 200
     
     return jsonify({"msg": "Invalid credentials"}), 401
+
+@auth_bp.route('/me', methods=['GET'])
+@jwt_required()
+def get_current_user():
+    """Get current authenticated user profile"""
+    current_user_id = get_jwt_identity()
+    user = User.query.get(int(current_user_id))
+    
+    if not user:
+        return jsonify({"msg": "User not found"}), 404
+    
+    return jsonify({
+        "id": user.id,
+        "name": user.name,
+        "email": user.email,
+        "role": user.role,
+        "created_at": user.created_at.isoformat() if hasattr(user, 'created_at') and user.created_at else None
+    }), 200
