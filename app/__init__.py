@@ -49,9 +49,10 @@ def create_app():
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     
     # ✅ Register startups with BOTH standard and proxy prefixes
+    # app/__init__.py - Register startups blueprint (STANDARD PATH ONLY)
     app.register_blueprint(startups_bp, url_prefix='/api/startups')
-
-    
+    app.register_blueprint(startups_proxy_bp, url_prefix='/api/proxy/startups')
+ 
     # Register other blueprints (standard paths only)
     app.register_blueprint(documents_bp, url_prefix='/api/documents')
     app.register_blueprint(diagnostics_bp, url_prefix='/api/diagnostics')
