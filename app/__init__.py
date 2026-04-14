@@ -19,7 +19,6 @@ def create_app():
             "origins": [
                 "http://localhost:3000",
                 "http://127.0.0.1:3000"
-                # Add production frontend later: "https://your-frontend.com"
             ],
             "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
             "allow_headers": ["Content-Type", "Authorization"],
@@ -31,9 +30,9 @@ def create_app():
     db.init_app(app)
     jwt.init_app(app)
 
-    # 🗂 Register Blueprints - ALL imports must be here
+    # 🗂 Register Blueprints
     from app.routes import main_bp
-    from app.auth import auth_bp  # ← This is the one failing - verify auth.py below
+    from app.auth import auth_bp
     from app.startups import startups_bp
     from app.documents.routes import documents_bp
     from app.valuations.routes import valuations_bp
@@ -48,7 +47,12 @@ def create_app():
     # Register with URL prefixes
     app.register_blueprint(main_bp)
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
+    
+    # ✅ Register startups with BOTH standard and proxy prefixes
     app.register_blueprint(startups_bp, url_prefix='/api/startups')
+    app.register_blueprint(startups_bp, url_prefix='/api/proxy/startups')
+    
+    # Register other blueprints (standard paths only)
     app.register_blueprint(documents_bp, url_prefix='/api/documents')
     app.register_blueprint(diagnostics_bp, url_prefix='/api/diagnostics')
     app.register_blueprint(verification_bp, url_prefix='/api/verification')
