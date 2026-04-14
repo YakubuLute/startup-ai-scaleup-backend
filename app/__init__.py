@@ -3,7 +3,8 @@ import os
 from flask import Flask
 from flask_cors import CORS
 from app.extensions import db, jwt
-
+# app/__init__.py - Add this import with the others:
+from app.startups_proxy import startups_proxy_bp  # ← NEW LINE
 def create_app():
     app = Flask(__name__)
 
