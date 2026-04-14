@@ -10,7 +10,8 @@ startups_bp = Blueprint('startups', __name__)
 @jwt_required()
 def create_startup():
     """FR-02: Create a new startup"""
-    current_user_id = get_jwt_identity()
+    # ✅ Convert JWT identity (string) to int for DB consistency
+    current_user_id = int(get_jwt_identity())
     data = request.get_json()
     
     if not data.get('name'):
@@ -18,7 +19,7 @@ def create_startup():
     
     new_startup = Startup(
         name=data['name'],
-        owner_user_id=current_user_id,
+        owner_user_id=current_user_id,  # Now int, matches DB column
         sector=data.get('sector'),
         country=data.get('country', 'Ghana'),
         registration_number=data.get('registration_number'),
@@ -44,7 +45,7 @@ def create_startup():
 @jwt_required()
 def get_user_startups():
     """Get all startups owned by the current user"""
-    current_user_id = int(get_jwt_identity())
+    current_user_id = int(get_jwt_identity())  # ✅ Already correct
     startups = Startup.query.filter_by(owner_user_id=current_user_id).all()
     
     return jsonify({
@@ -56,7 +57,8 @@ def get_user_startups():
 @jwt_required()
 def get_startup(startup_id):
     """Get a specific startup (with ownership check)"""
-    current_user_id = get_jwt_identity()
+    # ✅ Convert JWT identity (string) to int for comparison
+    current_user_id = int(get_jwt_identity())
     startup = Startup.query.get_or_404(startup_id)
     
     if startup.owner_user_id != current_user_id:
@@ -68,7 +70,8 @@ def get_startup(startup_id):
 @jwt_required()
 def update_startup(startup_id):
     """FR-04: Update an existing startup (owner only)"""
-    current_user_id = get_jwt_identity()
+    # ✅ Convert JWT identity (string) to int for comparison
+    current_user_id = int(get_jwt_identity())
     startup = Startup.query.get_or_404(startup_id)
     
     if startup.owner_user_id != current_user_id:
