@@ -4,7 +4,7 @@ from flask import Flask
 from flask_cors import CORS
 from app.extensions import db, jwt
 # app/__init__.py - Add this import with the others:
-from app.startups_proxy import startups_proxy_bp  # ← NEW LINE
+
 def create_app():
     app = Flask(__name__)
 
@@ -52,7 +52,7 @@ def create_app():
     # ✅ Register startups with BOTH standard and proxy prefixes
     # app/__init__.py - Register startups blueprint (STANDARD PATH ONLY)
     app.register_blueprint(startups_bp, url_prefix='/api/startups')
-    app.register_blueprint(startups_proxy_bp, url_prefix='/api/proxy/startups')
+    
  
     # Register other blueprints (standard paths only)
     app.register_blueprint(documents_bp, url_prefix='/api/documents')
