@@ -64,7 +64,7 @@ def create_app():
     app.add_url_rule('/api/proxy/startups', 'list_startups_proxy', get_user_startups, methods=['GET'])
     app.add_url_rule('/api/proxy/startups', 'create_startup_proxy', create_startup, methods=['POST'])
     app.add_url_rule('/api/proxy/startups/<int:startup_id>', 'get_startup_proxy', get_startup, methods=['GET'])
-    # app.add_url_rule('/api/proxy/startups/<int:startup_id>', 'update_startup_proxy', update_startup, methods=['PUT'])
+    app.add_url_rule('/api/proxy/startups/<int:startup_id>', 'update_startup_proxy', update_startup, methods=['PUT'])
     # app.add_url_rule('/api/proxy/startups/<int:startup_id>', 'delete_startup_proxy', delete_startup, methods=['DELETE'])
     
     # Register other blueprints (standard paths only)
