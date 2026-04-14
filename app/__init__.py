@@ -56,7 +56,7 @@ def create_app():
         create_startup,
         get_user_startups,
         get_startup,
-        # update_startup,  # Uncomment when you have this function
+        update_startup,  # Uncomment when you have this function
         # delete_startup,  # Uncomment when you have this function
     )
 
