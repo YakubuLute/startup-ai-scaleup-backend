@@ -66,3 +66,38 @@ def get_startup(startup_id):
         return jsonify({"msg": "Access denied"}), 403
     
     return jsonify({"startup": startup.to_dict()}), 200
+
+# =============================================================================
+# PROXY ALIAS ROUTES (for frontend proxy configuration)
+# These mirror the standard routes but at /proxy/* path
+# =============================================================================
+
+@startups_bp.route('/proxy', methods=['GET'])
+@jwt_required()
+def list_startups_proxy():
+    """Proxy alias: GET /api/proxy/startups"""
+    return get_user_startups()
+
+@startups_bp.route('/proxy/<int:startup_id>', methods=['GET'])
+@jwt_required()
+def get_startup_proxy(startup_id):
+    """Proxy alias: GET /api/proxy/startups/<id>"""
+    return get_startup(startup_id)
+
+@startups_bp.route('/proxy', methods=['POST'])
+@jwt_required()
+def create_startup_proxy():
+    """Proxy alias: POST /api/proxy/startups"""
+    return create_startup()
+
+@startups_bp.route('/proxy/<int:startup_id>', methods=['PUT'])
+@jwt_required()
+def update_startup_proxy(startup_id):
+    """Proxy alias: PUT /api/proxy/startups/<id>"""
+    return update_startup(startup_id)
+
+@startups_bp.route('/proxy/<int:startup_id>', methods=['DELETE'])
+@jwt_required()
+def delete_startup_proxy(startup_id):
+    """Proxy alias: DELETE /api/proxy/startups/<id>"""
+    return delete_startup(startup_id)
