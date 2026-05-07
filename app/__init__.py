@@ -3,6 +3,8 @@ import os
 from flask import Flask
 from flask_cors import CORS
 from app.extensions import db, jwt
+from app.documents.routes import documents_bp
+
 
 def create_app():
     app = Flask(__name__)
@@ -30,7 +32,7 @@ def create_app():
     db.init_app(app)
     jwt.init_app(app)
 
-    # 🗂 Register Blueprints
+    # 🗂 Register Blueprints (ALL imports INSIDE create_app)
     from app.routes import main_bp
     from app.auth import auth_bp
     from app.startups import startups_bp
@@ -43,7 +45,8 @@ def create_app():
     from app.notifications.routes import notifications_bp
     from app.programs.routes import programs_bp
     from app.analytics.routes import analytics_bp
-
+   
+    
     # Register with URL prefixes
     app.register_blueprint(main_bp)
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
@@ -56,8 +59,7 @@ def create_app():
         create_startup,
         get_user_startups,
         get_startup,
-        update_startup,  # Uncomment when you have this function
-        # delete_startup,  # Uncomment when you have this function
+        update_startup,
     )
 
     # Register proxy routes directly on the app (exact URLs frontend expects)
@@ -65,9 +67,8 @@ def create_app():
     app.add_url_rule('/api/proxy/startups', 'create_startup_proxy', create_startup, methods=['POST'])
     app.add_url_rule('/api/proxy/startups/<int:startup_id>', 'get_startup_proxy', get_startup, methods=['GET'])
     app.add_url_rule('/api/proxy/startups/<int:startup_id>', 'update_startup_proxy', update_startup, methods=['PUT'])
-    # app.add_url_rule('/api/proxy/startups/<int:startup_id>', 'delete_startup_proxy', delete_startup, methods=['DELETE'])
     
-    # Register other blueprints (standard paths only)
+    # Register other blueprints (standard paths only) - EACH ONCE, INSIDE create_app
     app.register_blueprint(documents_bp, url_prefix='/api/documents')
     app.register_blueprint(diagnostics_bp, url_prefix='/api/diagnostics')
     app.register_blueprint(verification_bp, url_prefix='/api/verification')
@@ -77,6 +78,7 @@ def create_app():
     app.register_blueprint(notifications_bp, url_prefix='/api/notifications')
     app.register_blueprint(programs_bp, url_prefix='/api/programs')
     app.register_blueprint(analytics_bp, url_prefix='/api/analytics')
+
 
     # 🗄 Create database tables
     with app.app_context():
