@@ -1,250 +1,358 @@
-# app/documents/routes.py
-from flask import Blueprint, request, jsonify
-from flask_jwt_extended import jwt_required, get_jwt_identity
-from app.extensions import db
-from app.models import BusinessDocument, DocumentTemplate, DocumentVersion, SharedDocumentLink, Startup
-from datetime import datetime, timedelta
+# ============================================================================
+# IMPORTS (All at top - no circular imports)
+# ============================================================================
+import io
 import secrets
+from datetime import datetime, timedelta
 
+from flask import Blueprint, request, jsonify, send_file
+from flask_jwt_extended import jwt_required, get_jwt_identity
+
+from app.extensions import db
+from app.models import BusinessDocument, Startup, DocumentShare, Subscription, SubscriptionPlan
+from app.documents.services import generate_document, TEMPLATES
+from app.documents.export import generate_pdf_from_markdown, generate_docx_from_markdown
+from app.billing.engine import check_and_track_usage
+from app.notifications.services import notify_document_ready
+
+# ============================================================================
+# BLUEPRINT DEFINITION
+# ============================================================================
 documents_bp = Blueprint('documents', __name__)
 
-def _check_doc_ownership(doc_id, user_id):
-    """Helper: Ensure user owns the startup that owns this document"""
-    doc = BusinessDocument.query.get_or_404(doc_id)
-    startup = Startup.query.get(doc.startup_id)
-    if not startup or startup.owner_user_id != user_id:
-        return jsonify({"msg": "Access denied: You do not own this document"}), 403
-    return doc
+# ============================================================================
+# CORE DOCUMENT ENDPOINTS (FR-10 to FR-13)
+# ============================================================================
 
-# =============================================================================
-# FR-10 / US-10: Template Catalog
-# =============================================================================
 @documents_bp.route('/templates', methods=['GET'])
 @jwt_required()
-def get_templates():
-    """List active document templates with wizard schema"""
-    templates = DocumentTemplate.query.filter_by(is_active=True).all()
+def list_templates():
+    """FR-10 / US-10: List available document templates"""
     return jsonify({
         "templates": [
-            {
-                "id": t.id,
-                "name": t.name,
-                "category": t.category,
-                "description": t.description,
-                "question_schema": t.question_schema
-            }
-            for t in templates
+            {"type": key, "name": key.replace('_', ' ').title(), "description": TEMPLATES[key].get('desc', '')}
+            for key in TEMPLATES.keys()
         ]
     }), 200
 
-# =============================================================================
-# FR-11 / US-11: Create Document Draft (Wizard Answers)
-# =============================================================================
-@documents_bp.route('', methods=['POST'])
+
+@documents_bp.route('/generate', methods=['POST'])
 @jwt_required()
-def create_document():
-    """Initialize document + save wizard draft"""
+def generate_document_endpoint():
+    """
+    FR-11 + FR-12 / US-11 + US-12: Generate a new document from template + inputs.
+    Includes FR-62 / US-62 usage limit enforcement for billing.
+    """
     current_user_id = int(get_jwt_identity())
     data = request.get_json()
     
-    template = DocumentTemplate.query.get_or_404(data.get('template_id'))
-    startup = Startup.query.get_or_404(data.get('startup_id'))
+    # Validate required fields
+    required = ['startup_id', 'doc_type', 'title', 'inputs']
+    for field in required:
+        if field not in data:
+            return jsonify({"msg": f"Missing required field: {field}"}), 400
     
-    if startup.owner_user_id != current_user_id:
-        return jsonify({"msg": "Access denied: You do not own this startup"}), 403
+    # Verify startup ownership (FR-03 / US-06)
+    startup = Startup.query.get(data['startup_id'])
+    if not startup or startup.owner_user_id != current_user_id:
+        return jsonify({"msg": "Access denied"}), 403
     
-    doc = BusinessDocument(
-        startup_id=startup.id,
-        template_id=template.id,
-        title=data.get('title', template.name),
-        status='Draft',
-        created_by=current_user_id
-    )
-    db.session.add(doc)
-    db.session.flush()  # Get ID before commit
+    # ========================================================================
+    # FR-62 / US-62: Check usage limit BEFORE allowing document generation
+    # ========================================================================
+    usage_check = check_and_track_usage(data['startup_id'], 'document')
+    if not usage_check['allowed']:
+        return jsonify({
+            "msg": f"Plan limit reached: {usage_check['current']}/{usage_check['limit']} documents this month",
+            "action_required": "Upgrade plan to continue",
+            "current_usage": usage_check['current'],
+            "limit": usage_check['limit']
+        }), 429  # 429 = Too Many Requests (standard for rate/usage limits)
     
-    # Save initial wizard answers as version 0
-    if data.get('wizard_answers'):
-        ver = DocumentVersion(
-            document_id=doc.id,
-            version_number=0,
-            content=str(data['wizard_answers']),
-            created_by=current_user_id
+    # ========================================================================
+    # Generate document content (FR-12 / US-12)
+    # ========================================================================
+    try:
+        # Merge title into inputs for template substitution
+        inputs_with_title = data['inputs'].copy()
+        inputs_with_title['title'] = data['title']
+        
+        # Generate content using template engine (placeholder for AI → LLM integration later)
+        content = generate_document(data['doc_type'], inputs_with_title)
+        
+        # Save to database with versioning (FR-13 / US-13)
+        new_doc = BusinessDocument(
+            startup_id=data['startup_id'],
+            title=data['title'],
+            doc_type=data['doc_type'],
+            content=content,
+            version=1,
+            status='draft',
+            generated_at=datetime.utcnow()
         )
-        db.session.add(ver)
-    
-    db.session.commit()
-    return jsonify({
-        "msg": "Document draft created",
-        "document": {"id": doc.id, "title": doc.title, "status": doc.status}
-    }), 201
-
-# =============================================================================
-# FR-12 / US-12: AI Draft Generation
-# =============================================================================
-@documents_bp.route('/<int:doc_id>/generate', methods=['POST'])
-@jwt_required()
-def generate_ai_draft(doc_id):
-    """Trigger AI generation (sync for now → async queue later per Spec 6.1)"""
-    current_user_id = int(get_jwt_identity())
-    doc = _check_doc_ownership(doc_id, current_user_id)
-    
-    if doc.status not in ('Draft', 'Generating'):
-        return jsonify({"msg": "Document already generated"}), 400
-    
-    doc.status = 'Generating'
-    db.session.commit()
-    
-    #  TODO: Replace with actual LLM API call (OpenAI, Anthropic, etc.)
-    # Placeholder simulates AI output based on template + wizard answers
-    latest_ver = DocumentVersion.query.filter_by(document_id=doc.id).order_by(DocumentVersion.version_number.desc()).first()
-    wizard_data = latest_ver.content if latest_ver else "{}"
-    
-    ai_content = f"""# {doc.title} (AI Generated Draft)
-
-## Executive Summary
-Based on your inputs: {wizard_data}
-
-## Business Model
-- Revenue Streams: [Auto-populated from wizard]
-- Target Market: [Auto-populated from wizard]
-
-## Operations & Compliance
-- Recommended SOPs: [Generated from template rules]
-- HR Policy Outline: [Generated from industry sector]
-
-*Note: This is an AI-assisted draft. Please review and customize before sharing.*
-"""
-    
-    new_ver = DocumentVersion(
-        document_id=doc.id,
-        version_number=DocumentVersion.query.filter_by(document_id=doc.id).count(),
-        content=ai_content,
-        created_by=current_user_id
-    )
-    db.session.add(new_ver)
-    doc.status = 'Ready'
-    db.session.commit()
-    
-    return jsonify({
-        "msg": "Document generated successfully",
-        "version": new_ver.version_number,
-        "preview": ai_content[:300] + "..."
-    }), 200
-
-# =============================================================================
-# FR-13 / US-13: Get Document + Version History
-# =============================================================================
-@documents_bp.route('/<int:doc_id>', methods=['GET'])
-@jwt_required()
-def get_document(doc_id):
-    """Get latest version + metadata"""
-    current_user_id = int(get_jwt_identity())
-    doc = _check_doc_ownership(doc_id, current_user_id)
-    
-    latest = DocumentVersion.query.filter_by(document_id=doc.id).order_by(DocumentVersion.version_number.desc()).first()
-    versions = DocumentVersion.query.filter_by(document_id=doc.id).all()
-    
-    return jsonify({
-        "document": {
-            "id": doc.id,
-            "title": doc.title,
-            "status": doc.status,
-            "template_id": doc.template_id,
-            "current_version": latest.version_number if latest else 0,
-            "content": latest.content if latest else None,
-            "version_history": [
-                {"version": v.version_number, "created_at": v.created_at.isoformat(), "created_by": v.created_by}
-                for v in versions
-            ]
-        }
-    }), 200
-
-@documents_bp.route('/<int:doc_id>', methods=['PUT'])
-@jwt_required()
-def update_document(doc_id):
-    """Save manual edits → creates new version"""
-    current_user_id = int(get_jwt_identity())
-    doc = _check_doc_ownership(doc_id, current_user_id)
-    data = request.get_json()
-    
-    if not data.get('content'):
-        return jsonify({"msg": "Content is required for version update"}), 400
-    
-    new_ver = DocumentVersion(
-        document_id=doc.id,
-        version_number=DocumentVersion.query.filter_by(document_id=doc.id).count(),
-        content=data['content'],
-        created_by=current_user_id
-    )
-    db.session.add(new_ver)
-    doc.updated_at = datetime.utcnow()
-    db.session.commit()
-    
-    return jsonify({"msg": "Document updated", "version": new_ver.version_number}), 200
-
-# =============================================================================
-# FR-14 / US-15: Secure Sharing
-# =============================================================================
-@documents_bp.route('/<int:doc_id>/share', methods=['POST'])
-@jwt_required()
-def create_share_link(doc_id):
-    """Generate read-only share link with optional expiry"""
-    current_user_id = int(get_jwt_identity())
-    doc = _check_doc_ownership(doc_id, current_user_id)
-    data = request.get_json() or {}
-    
-    days = data.get('expires_in_days', 7)
-    link = SharedDocumentLink(
-        document_id=doc.id,
-        expires_at=datetime.utcnow() + timedelta(days=days)
-    )
-    db.session.add(link)
-    db.session.commit()
-    
-    return jsonify({
-        "share_url": f"/api/documents/shared/{link.token}",
-        "expires_at": link.expires_at.isoformat(),
-        "token": link.token
-    }), 201
-
-@documents_bp.route('/shared/<token>', methods=['GET'])
-def view_shared_document(token):
-    """Public read-only access (no auth required)"""
-    link = SharedDocumentLink.query.filter_by(token=token, is_active=True).first_or_404()
-    
-    if link.expires_at and link.expires_at < datetime.utcnow():
-        link.is_active = False
+        db.session.add(new_doc)
         db.session.commit()
-        return jsonify({"msg": "Share link expired"}), 403
+        
+        # Optional: Notify user document is ready (FR-80 / US-80 stub)
+        # notify_document_ready(document_title=new_doc.title, user_id=current_user_id, doc_id=new_doc.id)
+        
+        return jsonify({
+            "msg": "Document generated successfully",
+            "document": new_doc.to_dict()
+        }), 201
+        
+    except ValueError as e:
+        return jsonify({"msg": str(e)}), 400
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"msg": "Failed to generate document", "error": str(e)}), 500
+
+
+@documents_bp.route('', methods=['GET'])
+@jwt_required()
+def list_documents():
+    """List all documents for the current user's startups (FR-10 / US-10)"""
+    current_user_id = int(get_jwt_identity())
     
-    latest = DocumentVersion.query.filter_by(document_id=link.document_id).order_by(DocumentVersion.version_number.desc()).first()
+    # Get all startups owned by user
+    startups = Startup.query.filter_by(owner_user_id=current_user_id).all()
+    startup_ids = [s.id for s in startups]
+    
+    # Get documents for those startups
+    docs = BusinessDocument.query.filter(
+        BusinessDocument.startup_id.in_(startup_ids)
+    ).order_by(BusinessDocument.generated_at.desc()).all()
+    
     return jsonify({
-        "title": latest.document.title,
-        "content": latest.content if latest else "",
-        "shared_at": link.created_at.isoformat()
+        "documents": [d.to_dict() for d in docs],
+        "count": len(docs)
     }), 200
 
-# =============================================================================
-# FR-14 / US-14: Export Stub (PDF/Docx)
-# =============================================================================
+
+@documents_bp.route('/<int:doc_id>', methods=['GET', 'PUT', 'DELETE'])
+@jwt_required()
+def manage_document(doc_id):
+    """
+    FR-13 / US-13: Get, update, or delete a specific document with versioning.
+    """
+    current_user_id = int(get_jwt_identity())
+    doc = BusinessDocument.query.get_or_404(doc_id)
+    
+    # Verify access: user must own the startup (FR-03 / US-06)
+    if doc.startup.owner_user_id != current_user_id:
+        return jsonify({"msg": "Access denied"}), 403
+    
+    if request.method == 'GET':
+        return jsonify({"document": doc.to_dict()}), 200
+    
+    elif request.method == 'PUT':
+        # Update content + increment version (FR-13 / US-13)
+        data = request.get_json()
+        if 'content' in data:
+            doc.content = data['content']
+            doc.version += 1
+            doc.updated_at = datetime.utcnow()
+        if 'status' in data:
+            doc.status = data['status']  # draft, ready, archived
+        if 'title' in data:
+            doc.title = data['title']
+        
+        db.session.commit()
+        return jsonify({
+            "msg": "Document updated",
+            "document": doc.to_dict()
+        }), 200
+    
+    elif request.method == 'DELETE':
+        # Soft delete or hard delete based on policy
+        db.session.delete(doc)
+        db.session.commit()
+        return jsonify({"msg": "Document deleted"}), 200
+
+
+# ============================================================================
+# FR-14 / US-14 + US-15: EXPORT & SHARING ENDPOINTS
+# ============================================================================
+
 @documents_bp.route('/<int:doc_id>/export', methods=['POST'])
 @jwt_required()
 def export_document(doc_id):
-    """Export to PDF/Docx (stub → integrate WeasyPrint/python-docx next)"""
+    """
+    FR-14 / US-14: Export document as PDF or Docx.
+    """
     current_user_id = int(get_jwt_identity())
-    doc = _check_doc_ownership(doc_id, current_user_id)
-    data = request.get_json() or {}
-    fmt = data.get('format', 'pdf').lower()
+    data = request.get_json()
     
-    if fmt not in ('pdf', 'docx'):
-        return jsonify({"msg": "Unsupported format. Use 'pdf' or 'docx'"}), 400
+    # Validate format
+    export_format = data.get('format', 'pdf').lower()
+    if export_format not in ['pdf', 'docx']:
+        return jsonify({"msg": "Format must be 'pdf' or 'docx'"}), 400
     
-    # 📦 TODO: Actual export logic
-    # - pdf: weasyprint.HTML(string=content).write_pdf()
-    # - docx: python-docx Document() + add_paragraphs()
+    # Get document and verify ownership
+    doc = BusinessDocument.query.get_or_404(doc_id)
+    if doc.startup.owner_user_id != current_user_id:
+        return jsonify({"msg": "Access denied"}), 403
+    
+    try:
+        # Generate file based on format
+        if export_format == 'pdf':
+            file_bytes = generate_pdf_from_markdown(doc.content, title=doc.title)
+            mimetype = 'application/pdf'
+            extension = 'pdf'
+        else:  # docx
+            file_bytes = generate_docx_from_markdown(doc.content, title=doc.title)
+            mimetype = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+            extension = 'docx'
+        
+        # Send file as download
+        filename = f"{doc.title.replace(' ', '_').lower()}.{extension}"
+        
+        return send_file(
+            io.BytesIO(file_bytes),
+            mimetype=mimetype,
+            as_attachment=True,
+            download_name=filename
+        )
+        
+    except ImportError as e:
+        return jsonify({"msg": f"Export library not installed: {str(e)}"}), 500
+    except Exception as e:
+        return jsonify({"msg": "Failed to export document", "error": str(e)}), 500
+
+
+@documents_bp.route('/<int:doc_id>/share', methods=['POST'])
+@jwt_required()
+def create_share_link(doc_id):
+    """
+    FR-14 / US-15: Create a shareable link for investors/mentors with expiry.
+    """
+    current_user_id = int(get_jwt_identity())
+    data = request.get_json()
+    
+    # Get document and verify ownership
+    doc = BusinessDocument.query.get_or_404(doc_id)
+    if doc.startup.owner_user_id != current_user_id:
+        return jsonify({"msg": "Access denied"}), 403
+    
+    # Parse expiry (default: 7 days per US-15)
+    expiry_days = data.get('expiry_days', 7)
+    expires_at = datetime.utcnow() + timedelta(days=expiry_days) if expiry_days else None
+    
+    # Generate unique share token (secure, URL-safe)
+    share_token = secrets.token_urlsafe(32)
+    
+    # Create share record with audit fields (Spec 6.4)
+    share = DocumentShare(
+        document_id=doc_id,
+        share_token=share_token,
+        expires_at=expires_at,
+        allow_download=data.get('allow_download', False),
+        created_by_user_id=current_user_id,
+        access_count=0
+    )
+    
+    db.session.add(share)
+    db.session.commit()
+    
+    # Build full share URL (in production, use your actual domain from config)
+    # Build full share URL (use config for production domain)
+    base_url = request.host_url.rstrip('/')  # e.g., "http://127.0.0.1:5000"
+    share_url = f"{base_url}/api/documents/shared/{share_token}"
     return jsonify({
-        "msg": f"{fmt.upper()} export queued (integration pending)",
-        "download_url": f"/api/documents/{doc_id}/download.{fmt}",
-        "note": "Install weasyprint or python-docx to enable actual file generation"
-    }), 202
+        "msg": "Share link created successfully",
+        "share_id": share.id,
+        "share_url": share_url,
+        "expires_at": expires_at.isoformat() if expires_at else None,
+        "allow_download": share.allow_download
+    }), 201
+
+
+@documents_bp.route('/shared/<share_token>', methods=['GET'])
+def access_shared_document(share_token):
+    """
+    FR-14 / US-15: Public endpoint for accessing shared documents (no auth required).
+    Investors/mentors use this link.
+    """
+    # Find share record
+    share = DocumentShare.query.filter_by(share_token=share_token).first()
+    
+    if not share:
+        return jsonify({"msg": "Share link not found"}), 404
+    
+    # Check if active (allow manual revocation)
+    if not share.is_active:
+        return jsonify({"msg": "This share link has been deactivated"}), 403
+    
+    # Check if expired
+    if share.expires_at and datetime.utcnow() > share.expires_at:
+        return jsonify({"msg": "This share link has expired"}), 403
+    
+    # Update access tracking (audit trail per Spec 6.4)
+    share.access_count += 1
+    share.last_accessed_at = datetime.utcnow()
+    db.session.commit()
+    
+    # Return document content (view-only per US-15)
+    doc = share.document
+    return jsonify({
+        "document": {
+            "title": doc.title,
+            "doc_type": doc.doc_type,
+            "content": doc.content,
+            "generated_at": doc.generated_at.isoformat() if doc.generated_at else None
+        },
+        "share_info": {
+            "allow_download": share.allow_download,
+            "access_count": share.access_count,
+            "expires_at": share.expires_at.isoformat() if share.expires_at else None,
+            "startup_name": doc.startup.name  # Context for investor
+        }
+    }), 200
+
+
+@documents_bp.route('/<int:doc_id>/shares', methods=['GET'])
+@jwt_required()
+def list_document_shares(doc_id):
+    """
+    FR-14 / US-15: List all active share links for a document.
+    """
+    current_user_id = int(get_jwt_identity())
+    
+    # Get document and verify ownership
+    doc = BusinessDocument.query.get_or_404(doc_id)
+    if doc.startup.owner_user_id != current_user_id:
+        return jsonify({"msg": "Access denied"}), 403
+    
+    # Get all shares for this document
+    shares = DocumentShare.query.filter_by(
+        document_id=doc_id
+    ).order_by(DocumentShare.created_at.desc()).all()
+    
+    return jsonify({
+        "shares": [s.to_dict() for s in shares],
+        "count": len(shares)
+    }), 200
+
+
+@documents_bp.route('/shares/<int:share_id>/revoke', methods=['POST'])
+@jwt_required()
+def revoke_share_link(share_id):
+    """
+    FR-14 / US-15: Revoke/deactivate a share link.
+    """
+    current_user_id = int(get_jwt_identity())
+    
+    # Get share and verify ownership
+    share = DocumentShare.query.get_or_404(share_id)
+    if share.document.startup.owner_user_id != current_user_id:
+        return jsonify({"msg": "Access denied"}), 403
+    
+    # Deactivate (soft delete pattern)
+    share.is_active = False
+    db.session.commit()
+    
+    return jsonify({
+        "msg": "Share link revoked successfully",
+        "share_id": share.id,
+        "is_active": share.is_active
+    }), 200
