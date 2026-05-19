@@ -3,19 +3,30 @@ from datetime import datetime, timedelta
 from app.extensions import db
 from app.models import SubscriptionPlan, Subscription, UsageRecord, BillingTransaction
 
+# 🔹 Map singular resource types to plural keys in limits dict
+RESOURCE_TYPE_MAP = {
+    'document': 'documents',
+    'valuation': 'valuations',
+    'diagnostic': 'diagnostics',
+    'share': 'shares'
+}
+
 def get_current_plan_limits(startup_id):
     """FR-60 / US-60: Get active plan limits for a startup"""
     sub = Subscription.query.filter_by(startup_id=startup_id, status='active').first()
     if not sub:
         # Default to Free plan limits if no subscription
         free_plan = SubscriptionPlan.query.filter_by(name='Free').first()
-        return free_plan.limits if free_plan else {'documents': 2, 'valuations': 1, 'diagnostics': 1, 'shares': 1}
+        return free_plan.limits if free_plan else {'documents': 3, 'valuations': 1, 'diagnostics': 2, 'shares': 5}
     return sub.plan.limits
 
 def check_and_track_usage(startup_id, resource_type):
     """FR-62 / US-62: Check limits & increment usage for current billing cycle"""
     limits = get_current_plan_limits(startup_id)
-    limit = limits.get(resource_type, 0)
+    
+    # 🔧 Map singular → plural for limits lookup
+    limit_key = RESOURCE_TYPE_MAP.get(resource_type, resource_type)
+    limit = limits.get(limit_key, 0)
     
     # Get current billing period
     sub = Subscription.query.filter_by(startup_id=startup_id, status='active').first()
@@ -28,15 +39,20 @@ def check_and_track_usage(startup_id, resource_type):
         period_start = sub.current_period_start
         period_end = sub.current_period_end
     
-    # Get or create usage record
+    # Get or create usage record (use plural key for storage consistency)
     usage = UsageRecord.query.filter_by(
-        startup_id=startup_id, resource_type=resource_type,
+        startup_id=startup_id, resource_type=limit_key,
         period_start=period_start, period_end=period_end
     ).first()
     
     if not usage:
-        usage = UsageRecord(startup_id=startup_id, resource_type=resource_type, count=0,
-                           period_start=period_start, period_end=period_end)
+        usage = UsageRecord(
+            startup_id=startup_id, 
+            resource_type=limit_key,  # Store plural for consistency
+            count=0,
+            period_start=period_start, 
+            period_end=period_end
+        )
         db.session.add(usage)
     
     # Enforce limit
@@ -75,11 +91,15 @@ def create_or_upgrade_subscription(startup_id, plan_id, payment_ref=None):
     db.session.commit()
     return {'msg': f"Subscribed to {plan.name}", 'status': 'active'}
 
-def record_billing_transaction(startup_id, subscription_id, amount, type_, status='completed', metadata=None):
+def record_billing_transaction(startup_id, subscription_id, amount, type_, status='completed', payment_metadata=None):
     """FR-63 / US-63: Log billing history"""
     txn = BillingTransaction(
-        startup_id=startup_id, subscription_id=subscription_id,
-        amount_ghs=amount, type=type_, status=status, metadata=metadata
+        startup_id=startup_id, 
+        subscription_id=subscription_id,
+        amount_ghs=amount, 
+        type=type_, 
+        status=status, 
+        payment_metadata=payment_metadata  # 🔧 Fixed: was 'metadata' (reserved word)
     )
     db.session.add(txn)
     db.session.commit()
