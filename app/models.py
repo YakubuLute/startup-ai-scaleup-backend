@@ -133,10 +133,10 @@ class VerificationCase(db.Model):
     __tablename__ = 'verification_case'
     id = db.Column(db.Integer, primary_key=True)
     startup_id = db.Column(db.Integer, db.ForeignKey('startup.id'), nullable=False)
-    status = db.Column(db.String(20), default='pending')
-    documents_submitted = db.Column(db.JSON)
+    status = db.Column(db.String(20), default='pending')  # pending, approved, rejected, etc.
+    documents_submitted = db.Column(db.JSON)  # List of document categories submitted
     reviewer_id = db.Column(db.Integer, db.ForeignKey('user.id'))
-    review_notes = db.Column(db.Text)
+    review_notes = db.Column(db.Text)  # Store JSON with detailed doc info + audit trail
     badge_issued = db.Column(db.Boolean, default=False)
     submitted_at = db.Column(db.DateTime, default=datetime.utcnow)
     reviewed_at = db.Column(db.DateTime)
@@ -144,7 +144,14 @@ class VerificationCase(db.Model):
     startup = db.relationship('Startup', backref='verifications')
     
     def to_dict(self):
-        return {'id': self.id, 'status': self.status, 'badge_issued': self.badge_issued}
+        return {
+            'id': self.id,
+            'startup_id': self.startup_id,
+            'status': self.status,
+            'badge_issued': self.badge_issued,
+            'submitted_at': self.submitted_at.isoformat() if self.submitted_at else None,
+            'reviewed_at': self.reviewed_at.isoformat() if self.reviewed_at else None
+        }
 
 # ============================================================================
 # PROGRAMS & COHORTS (EP-06)
