@@ -1,165 +1,277 @@
+# app/valuations/services.py
 """
-Valuation calculation services implementing FR-30 to FR-33.
+FR-30 + FR-31 + FR-32: Valuation Calculation Engines
+Implements DCF, Becker, and Asset-Based methods with sensitivity analysis.
 """
 
-from app.valuations.utils import calculate_npv, calculate_terminal_value, discount_to_present_value
+from typing import Dict, List, Optional
+from app.valuations.utils import (
+    calculate_npv, calculate_terminal_value, calculate_irr,
+    calculate_revenue_multiple, calculate_asset_based_valuation,
+    calculate_confidence_score
+)
 
-
-def calculate_dcf_valuation(financials: dict) -> dict:
+def run_dcf_valuation(financials: Dict) -> Dict:
     """
-    Calculate business valuation using Discounted Cash Flow (DCF) method.
-    FR-31: Automated Calculations
+    Discounted Cash Flow valuation method.
     
-    Args:
-        financials: Dict containing:
-            - revenue_history: List of historical revenues [Y1, Y2, Y3]
-            - projected_growth: Annual growth rate for forecast period
-            - profit_margin: Expected net profit margin
-            - discount_rate: WACC or required rate of return
-            - terminal_growth: Perpetual growth rate after forecast
-            - forecast_years: Number of years to project (default: 5)
+    Required inputs:
+    - revenue_history: List of past 3 years revenue [y-3, y-2, y-1]
+    - projected_growth: Annual growth rate for next 5 years (decimal)
+    - operating_margin: Expected operating margin (decimal)
+    - capex_percent: Capital expenditure as % of revenue (decimal)
+    - working_capital_change: Annual change in working capital (decimal)
+    - discount_rate: WACC (decimal)
+    - terminal_growth: Perpetual growth rate post-projection (decimal)
+    - tax_rate: Corporate tax rate (decimal)
     
     Returns:
-        Dict with valuation amount and detailed breakdown
+        Dict with valuation, breakdown, IRR, and confidence
     """
-    # Extract inputs with defaults
-    revenue_history = financials.get('revenue_history', [])
-    projected_growth = financials.get('projected_growth', 0.20)
-    profit_margin = financials.get('profit_margin', 0.15)
-    discount_rate = financials.get('discount_rate', 0.15)
-    terminal_growth = financials.get('terminal_growth', 0.03)
-    forecast_years = financials.get('forecast_years', 5)
+    # Validate required inputs
+    required = ['revenue_history', 'projected_growth', 'operating_margin', 
+                'capex_percent', 'working_capital_change', 'discount_rate', 
+                'terminal_growth', 'tax_rate']
+    for field in required:
+        if field not in financials:
+            return {'error': f'Missing required field: {field}'}
     
-    # Validate inputs
-    if discount_rate <= terminal_growth:
-        return {
-            'error': 'Discount rate must be greater than terminal growth rate',
-            'valuation': None
+    # Extract inputs
+    revenue_history = financials['revenue_history'][-3:]  # Last 3 years
+    last_revenue = revenue_history[-1] if revenue_history else 0
+    growth = financials['projected_growth']
+    margin = financials['operating_margin']
+    capex_pct = financials['capex_percent']
+    wc_change = financials['working_capital_change']
+    discount_rate = financials['discount_rate']
+    terminal_growth = financials['terminal_growth']
+    tax_rate = financials['tax_rate']
+    
+    # Project revenues for 5 years
+    projected_revenues = [last_revenue * ((1 + growth) ** t) for t in range(1, 6)]
+    
+    # Calculate Free Cash Flows (simplified)
+    fcfs = []
+    for revenue in projected_revenues:
+        ebit = revenue * margin
+        tax = ebit * tax_rate
+        nopat = ebit - tax
+        capex = revenue * capex_pct
+        wc_investment = revenue * wc_change
+        fcf = nopat - capex - wc_investment
+        fcfs.append(fcf)
+    
+    # Calculate terminal value
+    terminal_value = calculate_terminal_value(fcfs[-1], terminal_growth, discount_rate)
+    
+    # Calculate NPV of projection period + terminal value
+    cash_flows = [-last_revenue * 0.1] + fcfs  # Assume 10% initial investment
+    cash_flows[-1] += terminal_value  # Add terminal value to final year
+    
+    enterprise_value = calculate_npv(cash_flows, discount_rate)
+    
+    # Calculate IRR
+    irr = calculate_irr(cash_flows)
+    
+    # Sensitivity analysis (±2% discount rate, ±1% growth)
+    sensitivity = {
+        'discount_rate': {
+            'base': round(enterprise_value, 2),
+            'low': round(calculate_npv(cash_flows, discount_rate - 0.02), 2),
+            'high': round(calculate_npv(cash_flows, discount_rate + 0.02), 2)
+        },
+        'growth': {
+            'base': round(enterprise_value, 2),
+            'low': round(calculate_npv([cf * (0.98 if i > 0 else 1) for i, cf in enumerate(cash_flows)], discount_rate), 2),
+            'high': round(calculate_npv([cf * (1.02 if i > 0 else 1) for i, cf in enumerate(cash_flows)], discount_rate), 2)
         }
+    }
     
-    # Estimate starting cash flow from last historical revenue
-    if revenue_history:
-        last_revenue = revenue_history[-1]
-    else:
-        return {'error': 'Revenue history required', 'valuation': None}
-    
-    starting_fcf = last_revenue * profit_margin
-    
-    # Project future cash flows
-    projected_cf = []
-    current_fcf = starting_fcf
-    for year in range(1, forecast_years + 1):
-        current_fcf *= (1 + projected_growth)
-        projected_cf.append(current_fcf)
-    
-    # Calculate present value of projected cash flows
-    pv_cash_flows = sum(
-        cf / ((1 + discount_rate) ** year)
-        for year, cf in enumerate(projected_cf, start=1)
-    )
-    
-    # Calculate terminal value and discount to present
-    terminal_value = calculate_terminal_value(
-        projected_cf[-1], terminal_growth, discount_rate
-    )
-    pv_terminal = discount_to_present_value(
-        terminal_value, discount_rate, forecast_years
-    )
-    
-    # Total enterprise value
-    enterprise_value = pv_cash_flows + pv_terminal
-    
-    # Determine confidence based on data quality
-    confidence = 'high' if len(revenue_history) >= 3 else 'medium' if len(revenue_history) >= 1 else 'low'
+    # Calculate confidence score
+    completeness = 100  # All required fields provided
+    confidence = calculate_confidence_score(completeness, 'high', 'DCF')
     
     return {
-        'valuation': round(enterprise_value, 2),
+        'valuation': max(enterprise_value, 0),
+        'currency': 'GHS',
+        'method': 'DCF',
         'breakdown': {
-            'present_value_cash_flows': round(pv_cash_flows, 2),
+            'projected_revenues': [round(r, 2) for r in projected_revenues],
+            'projected_fcfs': [round(f, 2) for f in fcfs],
             'terminal_value': round(terminal_value, 2),
-            'pv_terminal_value': round(pv_terminal, 2),
-            'assumptions': {
-                'starting_fcf': round(starting_fcf, 2),
-                'projected_growth': projected_growth,
-                'discount_rate': discount_rate,
-                'terminal_growth': terminal_growth,
-                'forecast_years': forecast_years
-            }
+            'discount_rate': discount_rate * 100,
+            'terminal_growth': terminal_growth * 100
         },
+        'irr': irr * 100 if irr else None,
+        'sensitivity': sensitivity,
         'confidence': confidence,
-        'method': 'DCF'
+        'assumptions': {
+            'projection_years': 5,
+            'terminal_model': 'Gordon Growth'
+        }
     }
 
-
-def calculate_becker_valuation(financials: dict) -> dict:
+def run_becker_valuation(financials: Dict) -> Dict:
     """
-    Calculate valuation using Becker Method (simplified for early-stage startups).
-    Formula: Valuation = (Revenue × Industry Multiple) + (Team Score × Team Multiplier)
+    Becker Method valuation (simplified for early-stage startups).
     
-    Note: This is a simplified version. Full Becker method includes more factors.
+    Required inputs:
+    - revenue_history: List of past 2 years revenue
+    - industry_multiple: Industry revenue multiple (e.g., 3.5 for agritech)
+    - team_score: Team quality score 1-10
+    - market_score: Market attractiveness score 1-10
+    - traction_score: Customer traction score 1-10
+    
+    Returns:
+        Dict with valuation, breakdown, and confidence
     """
-    revenue = financials.get('revenue_history', [0])[-1] if financials.get('revenue_history') else 0
-    industry_multiple = financials.get('industry_multiple', 3.0)  # Typical range: 2-5x for agritech
-    team_score = financials.get('team_score', 5)  # 1-10 scale
-    team_multiplier = financials.get('team_multiplier', 10000)  # $10K per team point
+    # Validate required inputs
+    required = ['revenue_history', 'industry_multiple', 'team_score', 'market_score', 'traction_score']
+    for field in required:
+        if field not in financials:
+            return {'error': f'Missing required field: {field}'}
     
-    valuation = (revenue * industry_multiple) + (team_score * team_multiplier)
+    # Extract inputs
+    revenue = financials['revenue_history'][-1] if financials['revenue_history'] else 0
+    base_multiple = financials['industry_multiple']
+    team_score = min(max(financials['team_score'], 1), 10)
+    market_score = min(max(financials['market_score'], 1), 10)
+    traction_score = min(max(financials['traction_score'], 1), 10)
+    
+    # Calculate adjustment factor (Becker methodology)
+    # Base multiple adjusted by qualitative factors
+    adjustment = 1.0
+    adjustment += (team_score - 5) * 0.08  # ±0.4 max
+    adjustment += (market_score - 5) * 0.06  # ±0.3 max
+    adjustment += (traction_score - 5) * 0.04  # ±0.2 max
+    adjusted_multiple = base_multiple * adjustment
+    
+    # Calculate valuation
+    valuation = calculate_revenue_multiple(revenue, adjusted_multiple)
+    
+    # Sensitivity: show range based on multiple uncertainty
+    sensitivity = {
+        'multiple': {
+            'base': round(valuation, 2),
+            'low': round(calculate_revenue_multiple(revenue, adjusted_multiple * 0.8), 2),
+            'high': round(calculate_revenue_multiple(revenue, adjusted_multiple * 1.2), 2)
+        }
+    }
+    
+    # Confidence based on data quality
+    completeness = 100
+    confidence = calculate_confidence_score(completeness, 'medium', 'Becker')
     
     return {
-        'valuation': round(valuation, 2),
+        'valuation': valuation,
+        'currency': 'GHS',
+        'method': 'Becker',
         'breakdown': {
-            'revenue_component': round(revenue * industry_multiple, 2),
-            'team_component': round(team_score * team_multiplier, 2),
-            'assumptions': {
-                'industry_multiple': industry_multiple,
-                'team_score': team_score,
-                'team_multiplier': team_multiplier
+            'base_multiple': base_multiple,
+            'adjustment_factor': round(adjustment, 2),
+            'adjusted_multiple': round(adjusted_multiple, 2),
+            'latest_revenue': round(revenue, 2),
+            'qualitative_scores': {
+                'team': team_score,
+                'market': market_score,
+                'traction': traction_score
             }
         },
-        'confidence': 'medium',
-        'method': 'Becker'
+        'sensitivity': sensitivity,
+        'confidence': confidence,
+        'assumptions': {
+            'methodology': 'Becker Early-Stage Valuation',
+            'note': 'Best for startups with <3 years revenue history'
+        }
     }
 
-
-def calculate_asset_valuation(financials: dict) -> dict:
+def run_asset_valuation(financials: Dict) -> Dict:
     """
-    Calculate valuation using Asset-Based Method.
-    Valuation = Total Assets - Total Liabilities
-    """
-    total_assets = financials.get('total_assets', 0)
-    total_liabilities = financials.get('total_liabilities', 0)
-    intangible_adjustment = financials.get('intangible_adjustment', 0)  # For IP, brand, etc.
+    Asset-Based valuation method.
     
-    valuation = (total_assets - total_liabilities) + intangible_adjustment
+    Required inputs:
+    - total_assets: Total assets in GHS
+    - total_liabilities: Total liabilities in GHS
+    - intangible_assets: Optional intangible asset value
+    - asset_quality: 'high', 'medium', or 'low'
+    
+    Returns:
+        Dict with valuation, breakdown, and confidence
+    """
+    # Validate required inputs
+    required = ['total_assets', 'total_liabilities']
+    for field in required:
+        if field not in financials:
+            return {'error': f'Missing required field: {field}'}
+    
+    # Extract inputs
+    total_assets = financials['total_assets']
+    total_liabilities = financials['total_liabilities']
+    intangible = financials.get('intangible_assets', 0)
+    asset_quality = financials.get('asset_quality', 'medium')
+    
+    # Calculate net asset value
+    valuation = calculate_asset_based_valuation(total_assets, total_liabilities, intangible)
+    
+    # Apply quality adjustment
+    quality_factors = {'high': 1.0, 'medium': 0.9, 'low': 0.75}
+    adjusted_valuation = valuation * quality_factors.get(asset_quality, 0.9)
+    
+    # Sensitivity based on asset quality uncertainty
+    sensitivity = {
+        'asset_quality': {
+            'base': round(adjusted_valuation, 2),
+            'low': round(valuation * 0.75, 2),
+            'high': round(valuation * 1.0, 2)
+        }
+    }
+    
+    # Confidence based on asset tangibility
+    completeness = 100 if 'intangible_assets' in financials else 80
+    confidence = calculate_confidence_score(completeness, asset_quality, 'Asset')
     
     return {
-        'valuation': round(max(0, valuation), 2),  # Can't be negative
+        'valuation': round(adjusted_valuation, 2),
+        'currency': 'GHS',
+        'method': 'Asset',
         'breakdown': {
-            'net_tangible_assets': round(total_assets - total_liabilities, 2),
-            'intangible_adjustment': round(intangible_adjustment, 2),
-            'assumptions': {
-                'total_assets': total_assets,
-                'total_liabilities': total_liabilities
-            }
+            'total_assets': round(total_assets, 2),
+            'total_liabilities': round(total_liabilities, 2),
+            'intangible_assets': round(intangible, 2),
+            'net_book_value': round(valuation, 2),
+            'quality_adjustment': quality_factors.get(asset_quality, 0.9)
         },
-        'confidence': 'high' if total_assets > 0 else 'low',
-        'method': 'Asset'
+        'sensitivity': sensitivity,
+        'confidence': confidence,
+        'assumptions': {
+            'methodology': 'Adjusted Net Asset Value',
+            'note': 'Best for asset-heavy businesses (manufacturing, agriculture)'
+        }
     }
 
-
-def run_valuation(method: str, financials: dict) -> dict:
+def run_valuation(method: str, financials: Dict) -> Dict:
     """
-    Main entry point: route to appropriate valuation method.
+    Main entry point: Route to appropriate valuation method.
+    
+    Args:
+        method: One of 'DCF', 'Becker', 'Asset'
+        financials: Dict of financial inputs for the chosen method
+    
+    Returns:
+        Valuation result dict or error dict
     """
-    calculators = {
-        'DCF': calculate_dcf_valuation,
-        'Becker': calculate_becker_valuation,
-        'Asset': calculate_asset_valuation,
-        # 'Comparable': calculate_comparable_valuation  # Future
+    methods = {
+        'DCF': run_dcf_valuation,
+        'Becker': run_becker_valuation,
+        'Asset': run_asset_valuation
     }
     
-    calculator = calculators.get(method)
-    if not calculator:
-        return {'error': f'Unknown valuation method: {method}', 'valuation': None}
+    if method not in methods:
+        return {'error': f'Unknown valuation method: {method}. Available: {list(methods.keys())}'}
     
-    return calculator(financials)
+    try:
+        result = methods[method](financials)
+        result['calculated_at'] = None  # Will be set by route layer
+        return result
+    except Exception as e:
+        return {'error': f'Valuation calculation failed: {str(e)}'}
